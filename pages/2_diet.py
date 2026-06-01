@@ -1,4 +1,7 @@
 import streamlit as st
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db import upsert_pet
 
 st.title("🥗 건강한 맞춤 식단 매니저")
 st.write("우리 아이의 상태를 입력하면 하루 권장 칼로리와 영양 가이드를 계산해 드립니다.")
@@ -21,26 +24,20 @@ health_issues = st.multiselect(
 )
 
 
-# ── 칼로리 계산 (수의학 표준 공식) ──────────────────────────────────
 def calc_calories(weight_kg, age, species, neutered, weight_control):
     """RER(휴식기 에너지요구량) → MER(일일 에너지요구량)"""
-    # RER = 70 * (체중 ^ 0.75)
     rer = 70 * (weight_kg ** 0.75)
-
-    # 생애주기/상태에 따른 계수
     if age < 1:
-        factor = 2.5            # 성장기
+        factor = 2.5
     elif weight_control:
-        factor = 1.0            # 체중 감량 목표
+        factor = 1.0
     elif neutered:
         factor = 1.6 if species == "강아지" else 1.2
     else:
         factor = 1.8 if species == "강아지" else 1.4
-
     return rer, rer * factor
 
 
-# 건강 고민별 추천 성분
 NUTRIENT_GUIDE = {
     "관절/뼈": "글루코사민, 콘드로이틴, 오메가3",
     "피부/모질": "오메가3·6, 비오틴, 아연",
@@ -64,7 +61,6 @@ if st.button("맞춤 식단 분석하기", type="primary"):
         m1.metric("하루 권장 칼로리", f"{mer:,.0f} kcal")
         m2.metric("휴식기 기초대사량(RER)", f"{rer:,.0f} kcal")
 
-        # 일반 건사료 기준 대략적인 급여량 (약 3,500 kcal/kg 가정)
         grams = mer / 3500 * 1000
         st.info(f"💡 일반 건사료 기준 하루 약 **{grams:.0f}g** 정도가 적당해요. "
                 "(제품 칼로리에 따라 달라질 수 있어요)")
@@ -74,12 +70,7 @@ if st.button("맞춤 식단 분석하기", type="primary"):
             for issue in health_issues:
                 st.write(f"- **{issue}**: {NUTRIENT_GUIDE[issue]}")
 
-        # ── 프로필 등록 (사이드바·다른 페이지에서 공유) ──────────────
-        if "pets" not in st.session_state:
-            st.session_state.pets = []
-
-        existing = [p for p in st.session_state.pets if p["name"] != name]
-        existing.append({"name": name, "age": age, "weight": weight,
-                         "species": species, "mer": round(mer)})
-        st.session_state.pets = existing
+        # ── DB 에 프로필 저장(같은 이름이면 갱신) ────────────────────
+        upsert_pet(name=name, species=species, age=age, weight=weight,
+                   neutered=neutered, mer=round(mer))
         st.success(f"'{name}' 프로필이 저장되었어요. 사이드바에서 확인할 수 있어요!")

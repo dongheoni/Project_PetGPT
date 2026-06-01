@@ -1,18 +1,29 @@
 import streamlit as st
 from datetime import date, timedelta
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db import (get_pets, get_schedules, add_schedule, complete_schedule,
+                get_records, add_record, delete_record)
 
 st.title("📒 건강 수첩")
-st.write("예방접종·구충 같은 반복 일정부터 병원 진료 내용까지, 우리 아이의 건강 기록을 한곳에서 관리하세요.")
+st.write("예방접종·구충 같은 반복 일정부터 병원 진료 내용까지, "
+         "우리 아이의 건강 기록을 한곳에서 관리하세요.")
 
-# ── 상태 초기화 ────────────────────────────────────────────────────
-if "schedules" not in st.session_state:
-    st.session_state.schedules = []
-if "records" not in st.session_state:
-    st.session_state.records = []   # 병원 진료 기록
-
-pet_names = [p["name"] for p in st.session_state.get("pets", [])]
+pets = get_pets()                            # [{id, name, ...}, ...]
+pet_options = {p["name"]: p["id"] for p in pets}   # 드롭다운 표시용
 
 tab_schedule, tab_record = st.tabs(["📅 케어 일정", "🏥 진료 기록"])
+
+
+def pet_picker(label, key, allow_text=True):
+    """반려동물 선택 위젯. 등록된 게 없으면 텍스트 입력으로 대체."""
+    if pet_options:
+        name = st.selectbox(label, list(pet_options.keys()), key=key)
+        return pet_options[name], name
+    if allow_text:
+        name = st.text_input(label, placeholder="이름 입력", key=key + "_txt")
+        return None, name or "미지정"
+    return None, "미지정"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -23,10 +34,7 @@ with tab_schedule:
 
     col1, col2 = st.columns(2)
     with col1:
-        if pet_names:
-            pet = st.selectbox("대상 반려동물", pet_names, key="sch_pet")
-        else:
-            pet = st.text_input("대상 반려동물", placeholder="이름 입력", key="sch_pet_txt")
+        sch_pet_id, _ = pet_picker("대상 반려동물", "sch_pet")
         care_type = st.selectbox(
             "케어 종류",
             ["예방접종", "심장사상충 약", "구충", "목욕/미용", "건강검진", "생일", "기타"],
@@ -39,25 +47,21 @@ with tab_schedule:
 
     if st.button("일정 등록", type="primary", key="add_schedule"):
         next_due = last_done + timedelta(days=cycle_days) if cycle_days else last_done
-        st.session_state.schedules.append({
-            "pet": pet or "미지정",
-            "type": care_type,
-            "last": last_done,
-            "cycle": cycle_days,
-            "next": next_due,
-        })
+        add_schedule(sch_pet_id, care_type, last_done, cycle_days, next_due)
         st.success(f"'{care_type}' 일정이 등록되었어요.")
+        st.rerun()
 
     st.divider()
 
     st.subheader("🔔 다가오는 일정")
-    schedules = st.session_state.schedules
+    schedules = get_schedules()
     if not schedules:
         st.caption("아직 등록된 일정이 없어요.")
     else:
         today = date.today()
-        for i, s in enumerate(sorted(schedules, key=lambda x: x["next"])):
-            d_day = (s["next"] - today).days
+        for s in schedules:
+            next_due = date.fromisoformat(s["next_due"])
+            d_day = (next_due - today).days
             if d_day < 0:
                 label = f"🔴 {-d_day}일 지남"
             elif d_day == 0:
@@ -69,14 +73,10 @@ with tab_schedule:
 
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 1])
-                c1.write(f"**{s['pet']}** · {s['type']}")
-                c2.write(f"예정일: {s['next']}  {label}")
-                if c3.button("완료", key=f"done_{i}"):
-                    if s["cycle"]:
-                        s["last"] = today
-                        s["next"] = today + timedelta(days=s["cycle"])
-                    else:
-                        st.session_state.schedules.remove(s)
+                c1.write(f"**{s['pet_name'] or '미지정'}** · {s['care_type']}")
+                c2.write(f"예정일: {next_due}  {label}")
+                if c3.button("완료", key=f"done_{s['id']}"):
+                    complete_schedule(s["id"], today, s["cycle_days"])
                     st.rerun()
 
 
@@ -89,10 +89,7 @@ with tab_record:
 
     col1, col2 = st.columns(2)
     with col1:
-        if pet_names:
-            rec_pet = st.selectbox("대상 반려동물", pet_names, key="rec_pet")
-        else:
-            rec_pet = st.text_input("대상 반려동물", placeholder="이름 입력", key="rec_pet_txt")
+        rec_pet_id, _ = pet_picker("대상 반려동물", "rec_pet")
         visit_date = st.date_input("진료일", value=date.today(), key="visit_date")
         hospital = st.text_input("병원 이름", placeholder="예: OO 동물병원")
     with col2:
@@ -112,37 +109,42 @@ with tab_record:
         if not diagnosis.strip() and not memo.strip():
             st.warning("진단 내용이나 메모 중 하나는 입력해 주세요.")
         else:
-            st.session_state.records.append({
-                "pet": rec_pet or "미지정",
-                "date": visit_date,
-                "hospital": hospital.strip(),
-                "type": visit_type,
-                "weight": weight_at_visit,
-                "cost": cost,
-                "diagnosis": diagnosis.strip(),
-                "prescription": prescription.strip(),
-                "memo": memo.strip(),
-            })
+            add_record(
+                pet_id=rec_pet_id,
+                visit_date=visit_date,
+                hospital=hospital.strip(),
+                visit_type=visit_type,
+                weight=weight_at_visit if weight_at_visit > 0 else None,
+                cost=cost,
+                diagnosis=diagnosis.strip(),
+                prescription=prescription.strip(),
+                memo=memo.strip(),
+            )
             st.success("진료 기록이 저장되었어요.")
+            st.rerun()
 
     st.divider()
 
     st.subheader("📋 진료 이력")
-    records = st.session_state.records
 
-    if pet_names:
-        flt = st.selectbox("반려동물로 필터", ["전체"] + pet_names, key="rec_filter")
+    # 반려동물 필터
+    filter_pet_id = None
+    if pet_options:
+        flt = st.selectbox("반려동물로 필터", ["전체"] + list(pet_options.keys()),
+                           key="rec_filter")
         if flt != "전체":
-            records = [r for r in records if r["pet"] == flt]
+            filter_pet_id = pet_options[flt]
+
+    records = get_records(pet_id=filter_pet_id)
 
     if not records:
         st.caption("아직 진료 기록이 없어요.")
     else:
-        total_cost = sum(r["cost"] for r in records)
+        total_cost = sum(r["cost"] or 0 for r in records)
         st.metric("누적 진료비", f"{total_cost:,}원")
 
-        for i, r in enumerate(sorted(records, key=lambda x: x["date"], reverse=True)):
-            title = f"{r['date']} · {r['pet']} · {r['type']}"
+        for r in records:
+            title = f"{r['visit_date']} · {r['pet_name'] or '미지정'} · {r['visit_type']}"
             with st.expander(title):
                 if r["hospital"]:
                     st.write(f"🏥 **병원**: {r['hospital']}")
@@ -157,6 +159,6 @@ with tab_record:
                 if r["memo"]:
                     st.info(f"📝 {r['memo']}")
 
-                if st.button("이 기록 삭제", key=f"del_rec_{r['date']}_{i}"):
-                    st.session_state.records.remove(r)
+                if st.button("이 기록 삭제", key=f"del_rec_{r['id']}"):
+                    delete_record(r["id"])
                     st.rerun()

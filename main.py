@@ -1,4 +1,5 @@
 import streamlit as st
+from db import init_db, get_pets
 
 st.set_page_config(
     page_title="Pet-GPT: 반려동물 통합 케어",
@@ -6,14 +7,8 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── 앱 전역에서 공유하는 상태 초기화 ────────────────────────────────
-# (한 번만 만들어두면 모든 페이지에서 st.session_state 로 접근 가능)
-if "pets" not in st.session_state:
-    st.session_state.pets = []        # 등록한 반려동물 프로필 리스트
-if "schedules" not in st.session_state:
-    st.session_state.schedules = []   # 케어 일정 리스트
-if "records" not in st.session_state:
-    st.session_state.records = []     # 병원 진료 기록 리스트
+# 앱 진입 시 한 번만 호출되면 충분. SQLite 는 가벼우니 매 실행 호출해도 부담 없음.
+init_db()
 
 
 st.title("🐾 반려동물 생애주기 통합 관리 서비스")
@@ -49,11 +44,12 @@ with c6:
 
 st.divider()
 
-# ── 사이드바: 등록된 반려동물 요약 ──────────────────────────────────
+# ── 사이드바: DB 에서 반려동물 목록을 매번 읽어와 표시 ──────────────
 with st.sidebar:
     st.markdown("### 🐶 내 반려동물")
-    if st.session_state.pets:
-        for p in st.session_state.pets:
+    pets = get_pets()
+    if pets:
+        for p in pets:
             st.write(f"- **{p['name']}** ({p['age']}세 / {p['weight']}kg)")
     else:
         st.caption("아직 등록된 반려동물이 없어요.\n'맞춤 식단' 페이지에서 등록해 보세요.")
